@@ -2,13 +2,13 @@
 
 This repository contains Ansible playbooks for the automated deployment and configuration of Big Data tools, including:
 
-- `Hadoop`, along with the HDFS, YARN and MapReduce
+- Hadoop 3.3.6, along with the HDFS, YARN and MapReduce
 
-- `Spark`, along with a PySpark installtion with a Jupyter Notebook Kernel
+- Apache Spark Apache Spark 3.3.2, along with a PySpark installtion with a Jupyter Notebook Kernel
 
-- `Hive`, along with a MySQL metastore set up
+- Hive 3.1.3, along with a MySQL metastore set up
 
-- `Postgres`
+- Postgres 16.1
 
 - Bioinformatics tools such as `glow` and `hail`. 
 
