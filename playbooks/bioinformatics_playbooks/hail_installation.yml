@@ -1,0 +1,71 @@
+- name: Installing prerequisites for Hail on the RHEL 8 head node.
+  hosts: head_node
+  remote_user: temp
+  become: true
+  become_method: sudo
+  tasks:
+  - name: Update yum's repo cache and updating all the packages on the RHEL 8 head node
+    ansible.builtin.yum:
+      name: "*"
+      state: latest
+      update_cache: yes
+
+  - name: Importing the EPEL GPG key
+    ansible.builtin.rpm_key:
+      state: present
+      key: https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-8
+
+  - name: Enable EPEL repo for pdsh
+    ansible.builtin.yum:
+      name: https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
+      state: present
+
+  - name: Installing the prereqs with yum on the RHEL 8 node
+    ansible.builtin.yum:
+      name:
+        - git
+        - make
+        - gcc
+        - gcc-c++
+        - kernel-devel
+        - lz4-devel
+        - lapack
+        - openblas
+      state: present
+
+- name: Installing prerequisites for Hail on the Ubuntu Cluster nodes
+  hosts: cluster_nodes
+  become: true
+  become_method: sudo
+  tasks:
+  - name: Installing the prerequisite BLAS and LAPACK libraries
+    ansible.builtin.apt:
+      pkg:
+      - git
+      - libopenblas-dev
+      - liblapack3
+      force_apt_get: true
+
+- name: Installing Hail on the RHEL 8 head node
+  hosts: head_node
+  tasks:
+  - name: Cloning the Hail repo
+    ansible.builtin.git:
+      repo: https://github.com/hail-is/hail.git
+      dest: /tmp/hail
+## The check_pip_requirements file called as part of the Makefile has a typo, which needs editing
+  - name: Editing the python requirements file 
+    ansible.builtin.lineinfile:
+      path: /tmp/hail/check_pip_requirements.sh
+      regexp: '    PATH="$PATH:$HOME/.local/bin" pip-compile --quiet $reqs $pinned --output-file=$new_pinned'
+      line: '    PATH="$PATH:/usr/local/bin" pip-compile --quiet $reqs $pinned --output-file=$new_pinned'
+
+  - name: Running the make command
+    command: make install-on-cluster HAIL_COMPILE_NATIVES=1 SCALA_VERSION=2.12.15 SPARK_VERSION=3.3.2
+    args:
+      chdir: /tmp/hail/hail    
+
+  - name: Installing pyspark 3.3.0
+    command: pip install pyspark==3.3.0
+
+ 

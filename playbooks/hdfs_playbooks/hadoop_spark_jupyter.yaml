@@ -1,0 +1,757 @@
+- name: Installing prerequisites for Hadoop on the RHEL 8 head node.
+  hosts: head_node
+  become: true
+  tasks:
+
+  - name: Update yum's repo cache and updating all the packages on the RHEL 8 head node
+    ansible.builtin.yum:
+      name: "*"
+      state: latest
+      update_cache: yes
+
+
+  - name: Importing the EPEL GPG key
+    ansible.builtin.rpm_key:
+      state: present
+      key: https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-8
+
+  - name: Enable EPEL repo for pdsh
+    ansible.builtin.yum:
+      name: https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
+      state: present
+  
+  - name: Installing Python 3.9 and related packages
+    ansible.builtin.yum:
+      name:
+        - python39
+        - python39-devel
+        - python39-pip
+        - python39-requests
+        - screen
+  - name: Setting Python 3.9 as the default for python3
+    community.general.alternatives: 
+      name: python3
+      path: /usr/bin/python3.9
+
+  - name: Installing JDK 8 using yum on the RHEL 8 head node
+    ansible.builtin.yum:
+      name: java-1.8.0-openjdk-devel
+      state: present
+      update_cache: yes
+
+  - name: Installing python3-cryptography, pdsh-rcmd-ssh and sshpass on the RHEL 8 Head Node using dnf. 
+    ansible.builtin.dnf:
+      pkg:
+      - python3-cryptography
+      - sshpass
+      - pdsh-rcmd-ssh
+
+- name: Installing prerequisites for Hadoop on the Ubuntu cluster nodes. 
+  hosts: cluster_nodes
+  become: true
+  tasks:
+
+  - name: Installing JDK 8 using apt on the Ubuntu cluster nodes
+    ansible.builtin.apt:
+      name: openjdk-8-jdk
+      state: present
+      update_cache: yes
+    register: apt_action
+    retries: 100
+    until: apt_action is success or ('Failed to lock apt for exclusive operation' not in apt_action.msg and '/var/lib/dpkg/lock' not in apt_action.msg)
+
+  - name: Installing pdsh using apt on the Ubuntu cluster nodes
+    ansible.builtin.apt:
+      name: pdsh
+      state: present
+    register: apt_action
+    retries: 100
+    until: apt_action is success or ('Failed to lock apt for exclusive operation' not in apt_action.msg and '/var/lib/dpkg/lock' not in apt_action.msg)
+
+  - name: Installing python3-cryptography, pip and sshpass on the Ubuntu cluster nodes. 
+    ansible.builtin.apt:
+      pkg:
+      - python3-cryptography
+      - sshpass
+      - python3-pip
+    register: apt_action
+    retries: 100
+    until: apt_action is success or ('Failed to lock apt for exclusive operation' not in apt_action.msg and '/var/lib/dpkg/lock' not in apt_action.msg)
+
+
+- name: Setting up SSH connections between the nodes of the test cluster.
+  hosts: cluster
+  become: true
+  become_user: temp
+  tasks:
+    - name: Generating an OpenSSH rsa keypair with 2048 bits, without a passphrase.
+      community.crypto.openssh_keypair:
+        path: /home/temp/.ssh/id_rsa
+        size: 2048
+
+- name: Adding the RSA public key from the head node to the cluster nodes.
+  hosts: head_node
+  become: true
+  become_user: temp
+  vars_files:
+    - /etc/inventory/users.yaml
+    - /etc/inventory/pass.yaml
+
+  tasks:
+    - name: Copying the public key to the head node itself
+      command: sshpass -p {{ password  }} ssh-copy-id -i /home/temp/.ssh/id_rsa.pub -o StrictHostKeyChecking=no {{  localhost_bush  }}
+    - name: Copying the public key to Ubunutu_22_1
+      command: sshpass -p {{ password  }} ssh-copy-id -i /home/temp/.ssh/id_rsa.pub -o StrictHostKeyChecking=no {{ ubuntu_1 }}
+    - name: Copying the public key to Ubunutu_22_2
+      command: sshpass -p {{ password  }} ssh-copy-id -i /home/temp/.ssh/id_rsa.pub -o StrictHostKeyChecking=no {{ ubuntu_2 }}
+    - name: Copying the public key to Ubunutu_22_3
+      command: sshpass -p {{ password  }} ssh-copy-id -i /home/temp/.ssh/id_rsa.pub -o StrictHostKeyChecking=no {{ ubuntu_3 }}
+
+- name: Changing ownership of the public keys
+  hosts: cluster_nodes
+  become: true
+  vars_files:
+    - /etc/inventory/users.yaml
+    - /etc/inventory/pass.yaml
+  tasks:
+    - name: Changing key ownership
+      command: echo "{{ password  }}" | sudo chown temp:temp /home/temp/.ssh
+
+- name: Adding the RSA public key from the Ubuntu_22_1 to the other nodes
+  hosts: ubuntu_22_1
+  become: true
+  become_user: temp
+  vars_files:
+    - /etc/inventory/users.yaml
+    - /etc/inventory/pass.yaml
+
+  tasks:
+    - name: Copying the public key to the RHEL 8 head node
+      command: sshpass -p {{ password  }} ssh-copy-id -i /home/temp/.ssh/id_rsa.pub -o StrictHostKeyChecking=no {{ bush_domain }}
+    - name: Copying the public key to Ubunutu_22_2
+      command: sshpass -p {{ password  }} ssh-copy-id -i /home/temp/.ssh/id_rsa.pub -o StrictHostKeyChecking=no {{ ubuntu_2 }}
+    - name: Copying the public key to Ubunutu_22_3
+      command: sshpass -p {{ password  }} ssh-copy-id -i /home/temp/.ssh/id_rsa.pub -o StrictHostKeyChecking=no {{ ubuntu_3 }}
+
+- name: Adding the RSA public key from the Ubuntu_22_2 to the other nodes
+  hosts: ubuntu_22_2
+  become: true
+  become_user: temp
+  vars_files:
+    - /etc/inventory/users.yaml
+    - /etc/inventory/pass.yaml
+
+  tasks:
+    - name: Copying the public key to the RHEL 8 head node
+      command: sshpass -p {{ password  }} ssh-copy-id -i /home/temp/.ssh/id_rsa.pub -o StrictHostKeyChecking=no {{ bush_domain }}
+    - name: Copying the public key to Ubunutu_22_1
+      command: sshpass -p {{ password  }} ssh-copy-id -i /home/temp/.ssh/id_rsa.pub -o StrictHostKeyChecking=no {{ ubuntu_1 }}
+    - name: Copying the public key to Ubunutu_22_3
+      command: sshpass -p {{ password  }} ssh-copy-id -i /home/temp/.ssh/id_rsa.pub -o StrictHostKeyChecking=no {{ ubuntu_3 }}
+
+
+- name: Adding the RSA public key from the Ubuntu_22_3 to the other nodes
+  hosts: ubuntu_22_3
+  become: true
+  become_user: temp
+  vars_files:
+    - /etc/inventory/users.yaml
+    - /etc/inventory/pass.yaml
+
+  tasks:
+    - name: Copying the public key to the RHEL 8 head node
+      command: sshpass -p {{ password  }} ssh-copy-id -i /home/temp/.ssh/id_rsa.pub -o StrictHostKeyChecking=no {{ bush_domain }}
+    - name: Copying the public key to Ubunutu_22_1
+      command: sshpass -p {{ password  }} ssh-copy-id -i /home/temp/.ssh/id_rsa.pub -o StrictHostKeyChecking=no {{ ubuntu_1 }}
+    - name: Copying the public key to Ubunutu_22_2
+      command: sshpass -p {{ password  }} ssh-copy-id -i /home/temp/.ssh/id_rsa.pub -o StrictHostKeyChecking=no {{ ubuntu_2 }}
+
+
+- name: Port Opening on the RHEL 8 Head Node. 
+  hosts: head_node
+  become: true
+  become_method: sudo
+  tasks:
+
+  - name: Enabling port 8888 for the notebook
+    ansible.builtin.shell: iptables -I INPUT 1 -p tcp --dport 8888 -j ACCEPT
+
+  - name: Enabling port 50070 for the HTTP Hadoop web Interface
+    ansible.builtin.shell: iptables -I INPUT 1 -p tcp --dport 50070 -j ACCEPT
+
+  - name: Enabling port 8889 for the notebook
+    ansible.builtin.shell: iptables -I INPUT 1 -p tcp --dport 8889 -j ACCEPT
+
+  - name: Enabling port 8890 for the notebook
+    ansible.builtin.shell: iptables -I INPUT 1 -p tcp --dport 8890 -j ACCEPT
+
+  - name: Enabling ports 8088 for the history server
+    ansible.builtin.shell: iptables -I INPUT 1 -p tcp --dport 8088 -j ACCEPT
+
+  - name: Enabling ports 8030,8031 and 8032 for the history server
+    ansible.builtin.shell: iptables -I INPUT 1 -p tcp --dport 8030 -j ACCEPT
+
+  - name: Enabling ports 8030,8031 and 8032 for the history server
+    ansible.builtin.shell: iptables -I INPUT 1 -p tcp --dport 8031 -j ACCEPT
+
+  - name: Enabling ports 8030,8031 and 8032 for the history server
+    ansible.builtin.shell: iptables -I INPUT 1 -p tcp --dport 8032 -j ACCEPT
+
+  - name: Enabling ports 8030,8031 and 8032 for the history server
+    ansible.builtin.shell: iptables -I INPUT 1 -p tcp --dport 8033 -j ACCEPT
+
+  - name: Enabling port 4040 for the notebook
+    ansible.builtin.shell: iptables -I INPUT 1 -p tcp --dport 4040 -j ACCEPT
+
+  - name: Enabling port 8042 for MapReduce
+    ansible.builtin.shell: iptables -I INPUT 1 -p tcp --dport 8042 -j ACCEPT
+
+- name: Installing Hadoop and Apache Spark with Pyspark drivers enabled on the head node and editing the configuration files.
+  hosts: head_node
+  remote_user: temp
+  become: true
+  become_method: sudo
+  vars_files:
+    - /etc/inventory/users.yaml
+    - /etc/inventory/pass.yaml
+
+  tasks:
+
+  - name: Downloading Hadoop 3.3.6 (tarball) to the RHEL 8 head node
+    get_url:
+      url: http://apache.cs.utah.edu/hadoop/common/current/hadoop-3.3.6.tar.gz
+      dest: /tmp/hadoop-3.3.6.tar.gz
+      mode: 744
+
+  - name: Downloading Apache Spark 3.3.2 tarball (for Hadoop 3.3 and above) to the RHEL 8 head node
+    get_url:
+      url: https://archive.apache.org/dist/spark/spark-3.3.2/spark-3.3.2-bin-hadoop3.tgz
+      dest: /tmp/spark-3.3.2-bin-hadoop3.tgz
+      mode: 744
+
+  - name: Extracting the Spark binaries on the RHEL 8 head node
+    ansible.builtin.unarchive:
+      src: /tmp/spark-3.3.2-bin-hadoop3.tgz
+      dest: /opt/
+      remote_src: yes
+
+  - name: Extracting the Hadoop binaries on the RHEL 8 head node
+    ansible.builtin.unarchive:
+      src: /tmp/hadoop-3.3.6.tar.gz
+      dest: /opt/
+      remote_src: yes
+  
+  - name: Updating pip on the RHEL 8 head node
+    ansible.builtin.shell: python3 -m pip install --upgrade pip
+
+  - name: Installing Jupyter on the RHEL 8 head node
+    ansible.builtin.shell: pip3 install jupyter
+
+  - name: Editing the .bashrc file to update the location of Hadoop, Spark, and Pyspark
+    ansible.builtin.blockinfile:
+      path: /home/temp/.bashrc
+      insertafter: "# User specific aliases and functions"
+      block: |
+             export PDSH_RCMD_TYPE=ssh
+             export HADOOP_HOME=/opt/hadoop-3.3.6
+             export PATH=$PATH:$HADOOP_HOME/bin
+             export PATH=$PATH:$HADOOP_HOME/sbin
+             export HADOOP_MAPRED_HOME=${HADOOP_HOME}
+             export HADOOP_COMMON_HOME=${HADOOP_HOME}
+             export HADOOP_HDFS_HOME=${HADOOP_HOME}
+             export HADOOP_YARN_HOME=${HADOOP_HOME}
+             export JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk-1.8.0.402.b06-2.el8.x86_64
+             export LANG=en_US.UTF-8
+             export TZ=UTC
+             export CLASSPATH_PREPEND_DISTCACHE=
+             export SPARK_HOME=/opt/spark-3.3.2-bin-hadoop3
+             export PATH=$PATH:$SPARK_HOME/bin
+             export HADOOP_CONF_DIR=/opt/hadoop-3.3.6/etc/hadoop
+             export LD_LIBRARY_PATH=/opt/hadoop-3.3.6/lib/native:$LD_LIBRARY_PATH             
+             export PYSPARK_DRIVER_PYTHON=jupyter
+             export PYSPARK_DRIVER_PYTHON_OPTS="notebook --NotebookApp.open_browser=False --NotebookApp.ip='{{ bush_domain }}' "   
+             export PATH=$PATH:/usr/local/bin             
+
+  - name: Reloading the environment variables
+    ansible.builtin.shell: source /home/temp/.bashrc
+
+  - name: Creating a script to launch HDFS and YARN services and create a jupyter config file
+    ansible.builtin.file:
+      path: /home/temp/first_spark_setup.sh
+      state: touch
+      mode: u=rw,g=r,o=r
+  
+  - name: Editing the script
+    ansible.builtin.blockinfile:
+      path: /home/temp/first_spark_setup.sh
+      block: |
+        #!/bin/bash
+        hdfs namenode -format
+        jupyter notebook --generate-config
+        start-dfs.sh
+        start-yarn.sh
+        $SPARK_HOME/sbin/start-history-server.sh
+
+  - name: Creating a script to launch pyspark with customized configuration
+    ansible.builtin.file:
+      path: /home/temp/launch-jupyter.sh
+      state: touch
+      mode: u=rw,g=r,o=r
+ 
+  - name: Editing the launch-jupyter.sh script
+    ansible.builtin.blockinfile:
+      path: /home/temp/launch-jupyter.sh
+      block: |
+        #!/bin/bash
+        export PYSPARK_DRIVER_PYTHON_OPTS="notebook --NotebookApp.open_browser=False --NotebookApp.ip='{{ bush_domain }}' "
+        pyspark \
+          --executor-memory 6g \
+          --num-executors 4 \
+          --executor-cores 2 \
+          --master yarn \
+          --deploy-mode client
+
+  - name: Editing the Host file on each node to remove the "_" in the node names
+    ansible.builtin.lineinfile:
+      path: /etc/hosts
+      regexp: "{{ ubuntu_1 }}    ubuntu_22-1"
+      line: "{{ ubuntu_1 }}    ubuntu22-1"
+
+  - name: Editing the Host file on each node to remove the "_" in the node names
+    ansible.builtin.lineinfile:
+      path: /etc/hosts
+      regexp: "{{ ubuntu_2 }}    ubuntu_22-2"
+      line: "{{ ubuntu_2 }}    ubuntu22-2"
+
+  - name: Editing the Host file on each node to remove the "_" in the node names
+    ansible.builtin.lineinfile:
+      path: /etc/hosts
+      regexp: "{{ ubuntu_3 }}    ubuntu_22-3"
+      line: "{{ ubuntu_3 }}    ubuntu22-3"
+
+
+  - name: Editing the Host File on each node
+    ansible.builtin.blockinfile:
+      path: /etc/hosts
+      insertbefore: "{{ ubuntu_1 }}    ubuntu22-1"
+      block: |
+             {{ head_node }}    {{ head_node_name }}
+
+  - name: Setting the root of the Java installation in the hadoop-env.sh script
+    ansible.builtin.lineinfile:
+      path: /opt/hadoop-3.3.6/etc/hadoop/hadoop-env.sh
+      regexp: '# export JAVA_HOME='
+      line: 'export JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk-1.8.0.402.b06-2.el8.x86_64'
+
+  - name: Editing the core-site.xml config file
+    ansible.builtin.blockinfile:
+      path: /opt/hadoop-3.3.6/etc/hadoop/core-site.xml
+      marker: "<!-- {mark} ANSIBLE MANAGED BLOCK -->"
+      insertbefore: "<\/configuration>"
+      block: |4
+              <property>
+                  <name>fs.defaultFS</name>
+                  <value>hdfs://{{ head_node_name }}:9000</value>
+              </property>
+              <property>
+                  <name>io.file.buffer.size</name>
+                  <value>131072</value>
+              </property>
+
+  - name: Editing the hdfs-site.xml config file
+    ansible.builtin.blockinfile:
+      path: /opt/hadoop-3.3.6/etc/hadoop/hdfs-site.xml
+      marker: "<!-- {mark} ANSIBLE MANAGED BLOCK -->"
+      insertbefore: "<\/configuration>"
+      block: |4
+              <property>
+                  <name>dfs.namenode.name.dir</name>
+                  <value>/home/temp/data/nameNode</value>
+              </property>
+              <property>
+                  <name>dfs.blocksize</name>
+                  <value>268435456</value>
+              </property>
+              <property>
+                  <name>dfs.namenode.handler.count</name>
+                  <value>100</value>
+              </property>
+               <property>
+                  <name>dfs.datanode.data.dir</name>
+                  <value>/home/temp/data/dataNode</value>
+              </property>
+              <property>
+                  <name>dfs.replication</name>
+                  <value>3</value>
+              </property>
+
+  - name: Editing the yarn-site.xml config file
+    ansible.builtin.blockinfile:
+      path: /opt/hadoop-3.3.6/etc/hadoop/yarn-site.xml
+      marker: "<!-- {mark} ANSIBLE MANAGED BLOCK -->"
+      insertbefore: "<\/configuration>"
+      block: |4
+               <property>
+                   <name>yarn.nodemanager.aux-services</name>
+                   <value>mapreduce_shuffle</value>
+               </property>
+               <property>
+                   <name>yarn.nodemanager.aux-services.mapreduce.shuffle.class</name>
+                   <value>org.apache.hadoop.mapred.ShuffleHandler</value>
+               </property>
+               <property>
+                   <name>yarn.nodemanager.env-whitelist</name>
+                   <value>JAVA_HOME,HADOOP_COMMON_HOME,HADOOP_HDFS_HOME,HADOOP_CONF_DIR,CLASSPATH_PREPEND_DISTCACHE,HADOOP_YARN_HOME,HADOOP_HOME,PATH,LANG,TZ,HADOOP_MAPRED_HOME</value>
+               </property>
+               <property>
+                   <name>yarn.acl.enable</name>
+                   <value>0</value>
+               </property>
+               <property>
+                   <name>yarn.resourcemanager.hostname</name>
+                   <value>{{ head_node_name }}</value> 
+               </property> 
+               <property>
+                   <name>yarn.nodemnager.resource.memory-mb</name>
+                   <value>1024</value>
+               </property>
+               <property>
+                   <name>yarn.scheduler.minimum-allocation-mb</name>
+                   <value>1024</value>
+               </property>
+               <property>
+                   <name>yarn.app.mapreduce.am.resource.mb</name>
+                   <value>3000</value>
+                   <source>mapred-site.xml</source>
+               </property>
+
+  - name: Editing the mapred-site.xml config file
+    ansible.builtin.blockinfile:
+      path: /opt/hadoop-3.3.6/etc/hadoop/mapred-site.xml
+      marker: "<!-- {mark} ANSIBLE MANAGED BLOCK -->"
+      insertbefore: "<\/configuration>"
+      block: |4
+               <property>
+                   <name>mapreduce.framework.name</name>
+                   <value>yarn</value>
+               </property>
+               <property>
+                   <name>yarn.app.mapreduce.am.env</name>
+                   <value>HADOOP_MAPRED_HOME=$HADOOP_HOME</value>
+               </property>
+               <property>
+                   <name>mapreduce.map.env</name>
+                   <value>HADOOP_MAPRED_HOME=$HADOOP_HOME</value>
+               </property>
+               <property>
+                   <name>mapreduce.reduce.env</name>
+                   <value>HADOOP_MAPRED_HOME=$HADOOP_HOME</value>
+               </property>
+               <property> 
+                   <name>mapreduce.application.classpath</name>
+                   <value>$HADOOP_MAPRED_HOME/share/hadoop/mapreduce/*,$HADOOP_MAPRED_HOME/share/hadoop/mapreduce/lib/*,$HADOOP_MAPRED_HOME/share/hadoop/common/*,$HADOOP_MAPRED_HOME/share/hadoop/common/lib/*,$HADOOP_MAPRED_HOME/share/hadoop/yarn/*,$HADOOP_MAPRED_HOME/share/hadoop/yarn/lib/*,$HADOOP_MAPRED_HOME/share/hadoop/hdfs/*,$HADOOP_MAPRED_HOME/share/hadoop/hdfs/lib/*</value>
+               </property>
+               <property>
+                   <name>mapreduce.map.memory.mb</name>
+                   <value>1024</value>
+               </property>
+               <property>
+                   <name>mapreduce.reduce.memory.mb</name>
+                   <value>2048</value>
+               </property>
+
+  - name: Editing the workers config file
+    ansible.builtin.blockinfile:
+      path: /opt/hadoop-3.3.6/etc/hadoop/workers
+      marker: "# {mark} ANSIBLE MANAGED BLOCK "
+      insertafter: "localhost"
+      block: |
+               ubuntu22-1
+               ubuntu22-2
+               ubuntu22-3
+  - name: Editing the workers config file
+    ansible.builtin.lineinfile:
+      path: /opt/hadoop-3.3.6/etc/hadoop/workers
+      regexp: '^localhost'
+      state: absent
+
+  - name: Rename spark-defaults.conf.template to spark-defaults.conf
+    command: mv /opt/spark-3.3.2-bin-hadoop3/conf/spark-defaults.conf.template /opt/spark-3.3.2-bin-hadoop3/conf/spark-defaults.conf
+
+  - name: Setting the spark.master for spark to YARN
+    ansible.builtin.lineinfile:
+      path: /opt/spark-3.3.2-bin-hadoop3/conf/spark-defaults.conf
+      regexp: '# spark.master                     spark://master:7077'
+      line: 'spark.master                     yarn'
+  
+  - name: Setting the defaults for the Spark configuration file
+    ansible.builtin.blockinfile:
+      path: /opt/spark-3.3.2-bin-hadoop3/conf/spark-defaults.conf
+      insertafter: 'spark.master                     yarn'
+      block: |
+        spark.executor.memory    6g
+        spark.executor.instances 4
+        spark.executor.cores     2
+        spark.submit.deployMode  client      
+
+- name: Installing Hadoop and Spark on the cluster nodes and then editing the config files.
+  hosts: cluster_nodes
+  become: true
+  vars_files:
+    - /etc/inventory/users.yaml
+    - /etc/inventory/pass.yaml
+  tasks:
+  - name: Downloading Hadoop 3.3.6 (tarball) to the Ubuntu cluster nodes.
+    get_url:
+      url: http://apache.cs.utah.edu/hadoop/common/current/hadoop-3.3.6.tar.gz
+      dest: /tmp/hadoop-3.3.6.tar.gz
+
+  - name: Extracting the Hadoop binaries on the Ubuntu cluster nodes.
+    ansible.builtin.unarchive:
+      src: /tmp/hadoop-3.3.6.tar.gz
+      remote_src: yes
+      dest: /opt/
+  
+  - name: Downloading Apache Spark 3.3.2 tarball (for Hadoop 3.3 and above) to the RHEL 8 head node
+    get_url:
+      url: https://archive.apache.org/dist/spark/spark-3.3.2/spark-3.3.2-bin-hadoop3.tgz
+      dest: /tmp/spark-3.3.2-bin-hadoop3.tgz
+
+  - name: Extracting the Spark binaries on the RHEL 8 head node
+    ansible.builtin.unarchive:
+      src: /tmp/spark-3.3.2-bin-hadoop3.tgz
+      remote_src: yes
+      dest: /opt/
+
+  - name: Installing Jupyter using pip
+    ansible.builtin.pip:
+      name: jupyter
+
+  - name: Editing the .bashrc file to update hadoop configuration
+    ansible.builtin.blockinfile:
+      path: /home/temp/.bashrc
+      insertafter: "# for examples"
+      block: |
+             export PDSH_RCMD_TYPE=ssh
+             export HADOOP_HOME=/opt/hadoop-3.3.6
+             export PATH=$PATH:$HADOOP_HOME/bin
+             export PATH=$PATH:$HADOOP_HOME/sbin
+             export HADOOP_MAPRED_HOME=${HADOOP_HOME}
+             export HADOOP_COMMON_HOME=${HADOOP_HOME}
+             export HADOOP_HDFS_HOME=${HADOOP_HOME}
+             export YARN_HOME=${HADOOP_HOME}
+             export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64/
+             export LANG=en_US.UTF-8
+             export TZ=UTC
+             export CLASSPATH_PREPEND_DISTCACHE=
+             export SPARK_HOME=/opt/spark-3.3.2-bin-hadoop3
+             export PATH=$PATH:$SPARK_HOME/bin
+             export HADOOP_CONF_DIR=/opt/hadoop-3.3.6/etc/hadoop
+             export LD_LIBRARY_PATH=/opt/hadoop-3.3.6/lib/native:$LD_LIBRARY_PATH
+             export PATH=$PATH:~/.local/bin
+             export PYSPARK_DRIVER_PYTHON=jupyter
+             export PYSPARK_DRIVER_PYTHON_OPTS='notebook'
+
+  - name: Reloading the environment variables
+    ansible.builtin.shell: |
+      . /home/temp/.bashrc
+    args:
+      executable: /bin/bash
+  
+  - name: Setting the root of the Java installation in the hadoop-env.sh script
+    ansible.builtin.lineinfile:
+      path: /opt/hadoop-3.3.6/etc/hadoop/hadoop-env.sh
+      regexp: '# export JAVA_HOME='
+      line: 'export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64/'
+
+  - name: Editing the core-site.xml config file
+    ansible.builtin.blockinfile:
+      path: /opt/hadoop-3.3.6/etc/hadoop/core-site.xml
+      marker: "<!-- {mark} ANSIBLE MANAGED BLOCK -->"
+      insertbefore: "<\/configuration>"
+      block: |4
+              <property>
+                  <name>fs.defaultFS</name>
+                  <value>hdfs://{{ head_node_name }}:9000</value>
+              </property>
+              <property>
+                  <name>io.file.buffer.size</name>
+                  <value>131072</value>
+              </property>
+
+  - name: Editing the hdfs-site.xml config file
+    ansible.builtin.blockinfile:
+      path: /opt/hadoop-3.3.6/etc/hadoop/hdfs-site.xml
+      marker: "<!-- {mark} ANSIBLE MANAGED BLOCK -->"
+      insertbefore: "<\/configuration>"
+      block: |4
+              <property>
+                  <name>dfs.namenode.name.dir</name>
+                  <value>/home/temp/data/nameNode</value>
+              </property>
+              <property>
+                  <name>dfs.blocksize</name>
+                  <value>268435456</value>
+              </property>
+              <property>
+                  <name>dfs.namenode.handler.count</name>
+                  <value>100</value>
+              </property>
+               <property>
+                  <name>dfs.datanode.data.dir</name>
+                  <value>/home/temp/data/dataNode</value>
+              </property>
+              <property>
+                  <name>dfs.replication</name>
+                  <value>3</value>
+              </property>
+
+  - name: Editing the yarn-site.xml config file
+    ansible.builtin.blockinfile:
+      path: /opt/hadoop-3.3.6/etc/hadoop/yarn-site.xml
+      marker: "<!-- {mark} ANSIBLE MANAGED BLOCK -->"
+      insertbefore: "<\/configuration>"
+      block: |4
+               <property>
+                   <name>yarn.nodemanager.aux-services</name>
+                   <value>mapreduce_shuffle</value>
+               </property>
+               <property>
+                   <name>yarn.nodemanager.aux-services.mapreduce.shuffle.class</name>
+                   <value>org.apache.hadoop.mapred.ShuffleHandler</value>
+               </property>
+               <property>
+                   <name>yarn.nodemanager.env-whitelist</name>
+                   <value>JAVA_HOME,HADOOP_COMMON_HOME,HADOOP_HDFS_HOME,HADOOP_CONF_DIR,CLASSPATH_PREPEND_DISTCACHE,HADOOP_YARN_HOME,HADOOP_HOME,PATH,LANG,TZ,HADOOP_MAPRED_HOME</value>
+               </property>
+               <property>
+                   <name>yarn.resourcemanager.hostname</name>
+                   <value>{{ head_node_name }}</value>
+               </property>
+               <property>
+                   <name>yarn.acl.enable</name>
+                   <value>0</value>
+               </property>
+
+  - name: Editing the mapred-site.xml config file
+    ansible.builtin.blockinfile:
+      path: /opt/hadoop-3.3.6/etc/hadoop/mapred-site.xml
+      marker: "<!-- {mark} ANSIBLE MANAGED BLOCK -->"
+      insertbefore: "<\/configuration>"
+      block: |4
+               <property>
+                   <name>mapreduce.framework.name</name>
+                   <value>yarn</value>
+               </property>
+               <property>
+                   <name>yarn.app.mapreduce.am.env</name>
+                   <value>HADOOP_MAPRED_HOME=$HADOOP_HOME</value>
+               </property>
+               <property>
+                   <name>mapreduce.map.env</name>
+                   <value>HADOOP_MAPRED_HOME=$HADOOP_HOME</value>
+               </property>
+               <property>
+                   <name>mapreduce.reduce.env</name>
+                   <value>HADOOP_MAPRED_HOME=$HADOOP_HOME</value>
+               </property>
+               <property> 
+                   <name>mapreduce.application.classpath</name>
+                   <value>$HADOOP_MAPRED_HOME/share/hadoop/mapreduce/*,$HADOOP_MAPRED_HOME/share/hadoop/mapreduce/lib/*,$HADOOP_MAPRED_HOME/share/hadoop/common/*,$HADOOP_MAPRED_HOME/share/hadoop/common/lib/*,$HADOOP_MAPRED_HOME/share/hadoop/yarn/*,$HADOOP_MAPRED_HOME/share/hadoop/yarn/lib/*,$HADOOP_MAPRED_HOME/share/hadoop/hdfs/*,$HADOOP_MAPRED_HOME/share/hadoop/hdfs/lib/*</value>
+               </property>
+  - name: Editing the Host file on each node to remove the "_" in the node names
+    ansible.builtin.lineinfile:
+      path: /etc/hosts
+      regexp: "{{ ubuntu_1 }}    ubuntu_22-1"
+      line: "{{ ubuntu_1 }}    ubuntu22-1"
+
+  - name: Editing the Host file on each node to remove the "_" in the node names
+    ansible.builtin.lineinfile:
+      path: /etc/hosts
+      regexp: "{{ ubuntu_2 }}    ubuntu_22-2"
+      line: "{{ ubuntu_2 }}    ubuntu22-2"
+
+  - name: Editing the Host file on each node to remove the "_" in the node names
+    ansible.builtin.lineinfile:
+      path: /etc/hosts
+      regexp: "{{ ubuntu_3 }}    ubuntu_22-3"
+      line: "{{ ubuntu_3 }}    ubuntu22-3"
+
+  - name: Editing the Host file on each node to provide the IP for the head node
+    ansible.builtin.lineinfile:
+      path: /etc/hosts
+      regexp: "{{ localhost_bush }}    {{ head_node_name }}"
+      line: "{{ head_node }}    {{ head_node_name }}"
+
+
+  - name: Editing the workers config file
+    ansible.builtin.blockinfile:
+      path: /opt/hadoop-3.3.6/etc/hadoop/workers
+      marker: "# {mark} ANSIBLE MANAGED BLOCK "
+      insertafter: "localhost"
+      block: |
+               ubuntu22-1
+               ubuntu22-2
+               ubuntu22-3  
+
+  - name: Editing the workers config file
+    ansible.builtin.lineinfile:
+      path: /opt/hadoop-3.3.6/etc/hadoop/workers
+      regexp: '^localhost'
+      state: absent
+
+  - name: Rename spark-defaults.conf.template to spark-defaults.conf
+    command: mv /opt/spark-3.3.2-bin-hadoop3/conf/spark-defaults.conf.template /opt/spark-3.3.2-bin-hadoop3/conf/spark-defaults.conf
+
+  - name: Setting the spark.master for spark to YARN
+    ansible.builtin.lineinfile:
+      path: /opt/spark-3.3.2-bin-hadoop3/conf/spark-defaults.conf
+      regexp: '# spark.master                     spark://master:7077'
+      line: 'spark.master                     yarn'
+
+  - name: Setting the defaults for the Spark configuration file
+    ansible.builtin.blockinfile:
+      path: /opt/spark-3.3.2-bin-hadoop3/conf/spark-defaults.conf
+      insertafter: 'spark.master                     yarn'
+      block: |
+        spark.executor.memory    6g
+        spark.executor.instances 4
+        spark.executor.cores     2
+        spark.submit.deployMode  client
+
+
+- name: Initiating HDFS, YARN, and Pyspark
+  hosts: head_node
+  tasks:
+
+  - name: Formatting the name node
+    ansible.builtin.shell: hdfs namenode -format
+    ignore_errors: yes
+    args:
+      chdir: /home/temp
+
+  - name: Creating a jupyter config file
+    ansible.builtin.shell: jupyter notebook --generate-config
+    ignore_errors: yes
+    args:
+      chdir: /home/temp
+  - name: start-dfs.sh
+    ansible.builtin.shell: start-dfs.sh
+    ignore_errors: yes
+    args:
+      chdir: /home/temp
+
+  - name: start-yarn.sh
+    ansible.builtin.shell: nohup /opt/hadoop-3.3.6/sbin/start-yarn.sh
+    ignore_errors: yes
+    args:
+      chdir: /home/temp
+
+  - name: history server
+    ansible.builtin.shell: nohup /opt/hadoop-3.3.6/bin/mapred --daemon start historyserver
+    ignore_errors: yes
+    args:
+      chdir: /home/temp
+
+
+ 

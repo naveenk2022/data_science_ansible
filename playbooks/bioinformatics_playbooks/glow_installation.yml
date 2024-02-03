@@ -1,0 +1,91 @@
+- name: Installing Glow on the RHEL 8 head node
+  hosts: head_node
+  vars_files:
+    - /etc/inventory/users.yaml
+    - /etc/inventory/pass.yaml
+  tasks:
+  - name: Downloading Mambaforge
+    ansible.builtin.shell: wget -O Mambaforge.sh  "https://github.com/conda-forge/miniforge/releases/latest/download/Mambaforge-$(uname)-$(uname -m).sh"
+    args:
+      chdir: /tmp
+
+  - name: Installing Mambaforge
+    ansible.builtin.shell: bash Mambaforge.sh -b -p "${HOME}/conda"
+    args:
+      chdir: /tmp
+    ignore_errors: true
+
+  - name: Activating Conda
+    ansible.builtin.shell: |
+      source ~/.bashrc
+      source "${HOME}/conda/etc/profile.d/conda.sh"
+      source "${HOME}/conda/etc/profile.d/mamba.sh"
+
+
+  - name: Cloning the Glow repo
+    ansible.builtin.git:
+      repo: 'https://github.com/projectglow/glow.git'
+      dest: /tmp/glow
+    ignore_errors: True
+
+  - name: Editing the glow/python/environment.yaml file to add glow.py
+    ansible.builtin.blockinfile:
+      path: /tmp/glow/python/environment.yml
+      marker: "<!-- {mark} ANSIBLE MANAGED BLOCK -->"
+      insertafter: "  - pip:"
+      block: |4
+              - glow.py
+
+  - name: Removing the Ansible block lines
+    ansible.builtin.lineinfile:
+      path: /tmp/glow/python/environment.yml
+      state: absent
+      regexp: "<!-- BEGIN ANSIBLE MANAGED BLOCK -->"
+
+  - name: Removing the Ansible block lines
+    ansible.builtin.lineinfile:
+      path: /tmp/glow/python/environment.yml
+      state: absent
+      regexp: "<!-- END ANSIBLE MANAGED BLOCK -->"
+
+  - name: Creating the 'glow' env for Glow
+    ansible.builtin.shell: |
+      source ~/.bashrc
+      source "${HOME}/conda/etc/profile.d/conda.sh"
+      source "${HOME}/conda/etc/profile.d/mamba.sh"
+      conda activate 
+      mamba env create -f glow/python/environment.yml
+    args:
+      chdir: /tmp
+    ignore_errors: True
+  - name: Creating a script to launch Glow
+    file:
+      path: "/home/temp/launch-glow.sh"
+      state: touch
+
+  - name: Editing the launch-glow.sh script
+    copy:
+      dest: "/home/temp/launch-glow.sh"
+      content: |
+        #!/bin/bash
+        source ~/.bashrc
+        source "${HOME}/conda/etc/profile.d/mamba.sh"
+        export PYSPARK_DRIVER_PYTHON_OPTS="notebook --NotebookApp.open_browser=False --NotebookApp.ip='{{ bush_domain }}' "
+        mamba activate glow
+        pyspark --packages io.projectglow:glow-spark3_2.12:1.2.1 --conf spark.hadoop.io.compression.codecs=io.projectglow.sql.util.BGZFCodec
+
+  - name: Editing the .bashrc file
+    ansible.builtin.lineinfile:
+      path: /home/temp/.bashrc
+      insertafter: EOF
+      line: source "${HOME}/conda/etc/profile.d/conda.sh"
+
+  - name: Editing the .bashrc file
+    ansible.builtin.lineinfile:
+      path: /home/temp/.bashrc
+      insertafter: EOF
+      line: source "${HOME}/conda/etc/profile.d/mamba.sh"
+
+  - name: Activating conda and mamba 
+    ansible.builtin.shell: source ~/.bashrc
+ 

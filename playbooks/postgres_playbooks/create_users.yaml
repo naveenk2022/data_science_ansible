@@ -1,0 +1,25 @@
+---
+- name: Accessing Variables
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - /etc/inventory/users.yaml
+  tasks:
+    - name: Print values for each user
+      debug:
+        msg: "User: {{ item.key }}, UID: {{ item.value[0] }}, GID: {{  item.value[1] }}"
+      loop: "{{ users | dict2items }}"
+
+- name: Creating users
+  hosts: head_node
+  user: tempuser
+  become: true
+  vars_files:
+    - /etc/inventory/users.yaml
+  tasks:
+    - name: Registering users by first creating a group and then adding their UID and GID to the useradd command.
+      ansible.builtin.shell: |
+        sudo groupadd -g "{{ item.value[1] }}" "{{ item.key }}"
+        sudo useradd "{{ item.key  }}" -u "{{ item.value[0] }}" -g "{{ item.value[1] }}" 
+      ignore_errors: true
+      loop: "{{ users | dict2items }}"

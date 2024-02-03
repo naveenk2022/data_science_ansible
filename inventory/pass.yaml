@@ -1,0 +1,11 @@
+---
+password: password_goes_here
+pass_encrypted: $$$$$$$
+encrypted: test_password
+head_node: 111.22.333.4
+localhost_bush: 11.0.0.1
+ubuntu_1: 11.0.0.2
+ubuntu_2: 11.0.0.3
+ubuntu_3: 11.0.0.4
+bush_domain: example_domain@abc.com
+head_node_name: head_node

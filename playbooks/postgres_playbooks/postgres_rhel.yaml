@@ -1,0 +1,125 @@
+- name: Installing prerequisites for Postgres on the RHEL 8 head node.
+  hosts: head_node
+  user: postgres 
+  become: true
+  tasks:
+  - name: Update yum's repo cache and updating all the packages on the RHEL 8 head node
+    ansible.builtin.yum:
+      name: "*"
+      state: latest
+      update_cache: yes
+
+  - name: Installing make and related packages
+    ansible.builtin.dnf:
+      name:
+        - make >= 4.2
+        - gcc >= 8.5.0-20
+        - tar >= 1.30
+        - gzip >= 1.9
+        - bzip2 >= 1.0.6
+        - readline-devel >= 7.0
+        - libicu-devel >= 60.3
+        - zlib-devel >= 1.2.11
+      state: present
+
+- name: Installing Postgres on the RHEL 8 head node.
+  hosts: head_node
+  user: postgres 
+  become: true
+  tasks:
+  - name: Downloading postgres source code
+    ansible.builtin.get_url:
+      url: https://ftp.postgresql.org/pub/source/v16.1/postgresql-16.1.tar.gz
+      dest: /opt/postgresql-16.1.tar.gz
+      checksum: sha256:https://ftp.postgresql.org/pub/source/v16.1/postgresql-16.1.tar.gz.sha256 
+
+  - name: Unarchiving the postgres source code
+    ansible.builtin.unarchive:
+      src: /opt/postgresql-16.1.tar.gz
+      dest: /opt
+      remote_src: true
+
+  - name: Configuring the postgres source code 
+    ansible.builtin.shell: 
+      cmd: sudo ./configure
+      executable: /bin/bash
+      chdir: /opt/postgresql-16.1
+
+  - name: Starting the postgres 16 build 
+    ansible.builtin.shell:
+      cmd: sudo make world 
+      executable: /bin/bash
+      chdir: /opt/postgresql-16.1
+
+  - name: Installing postgres 16
+    ansible.builtin.shell:
+      cmd: sudo make install-world 
+      executable: /bin/bash
+      chdir: /opt/postgresql-16.1
+
+  - name: Giving the postgres user the postgres parent directory's permissions
+    ansible.builtin.shell:
+      cmd: sudo chown postgres /usr/local/pgsql
+      executable: /bin/bash
+      chdir: /usr/local
+  - name: Editing user `postgres`'s .bashrc file 
+    ansible.builtin.blockinfile:
+      path: /home/postgres/.bashrc
+      marker: "# -- {mark} ANSIBLE MANAGED BLOCK -- #"
+      insertafter: "# User specific aliases and functions"
+      block: |
+             LD_LIBRARY_PATH=/usr/local/pgsql/lib
+             export LD_LIBRARY_PATH
+             PATH=/usr/local/pgsql/bin:$PATH 
+             export PATH
+             MANPATH=/usr/local/pgsql/share/man:$MANPATH
+             export MANPATH 
+
+  - name: Enabling port 5432 for the server
+    ansible.builtin.shell: iptables -I INPUT 1 -p tcp --dport 5432 -j ACCEPT
+
+  - name: Enabling port 6010 for the notebook
+    ansible.builtin.shell: iptables -I INPUT 1 -p tcp --dport 6010 -j ACCEPT
+
+
+- name: Initializing the database cluster and server as the user `postgres`
+  hosts: head_node
+  user: postgres
+  tasks:
+
+  - name: Initializing the database cluster
+    ansible.builtin.shell:
+      cmd: source /home/postgres/.bashrc && initdb -D /usr/local/pgsql/data
+      executable: /bin/bash
+      chdir: /home/postgres
+    ignore_errors: yes
+
+  - name: Editing the postgresql.conf file to listen to all IP addresses
+    ansible.builtin.lineinfile:
+      path: /usr/local/pgsql/data/postgresql.conf
+      regexp: "listen_addresses = 'localhost'          # what IP address(es) to listen on;"
+      line: "listen_addresses = '*'          # what IP address(es) to listen on;"
+
+  - name: Editing the pg_hba.conf file to only allow connections from the 129.22.0.0/16 network, and only allow access to `mydb`
+    ansible.builtin.blockinfile:
+      path: /usr/local/pgsql/data/pg_hba.conf
+      marker: ""
+      insertafter: "host    replication     all             ::1/128                 trust"
+      block: |
+             host    mydb             all          129.22.0.0/16         scram-sha-256
+
+  - name: Initializing the database server
+    ansible.builtin.shell:
+      cmd: source /home/postgres/.bashrc && postgres -D /usr/local/pgsql/data >logfile 2>&1 &
+      executable: /bin/bash
+      chdir: /home/postgres
+    async: 0
+    poll: 0
+
+  - name: Creating the `mydb` test database
+    ansible.builtin.shell:
+      cmd: source /home/postgres/.bashrc && createdb mydb
+      executable: /bin/bash
+      chdir: /home/postgres
+    ignore_errors: yes
+

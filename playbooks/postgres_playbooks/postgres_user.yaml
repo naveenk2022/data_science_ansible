@@ -1,0 +1,32 @@
+- name: Creating the postgres user for Postgres on the RHEL 8 head node.
+  hosts: head_node
+  user: temp
+  become: true
+  vars_files:
+    - /etc/inventory/users.yaml
+    - /etc/inventory/pass.yaml
+  tasks:
+  - name: Creating the `postgres` group with GID 1500
+    ansible.builtin.shell: sudo groupadd -g 1500 postgres
+    ignore_errors: true
+
+  - name: Creating the `postgres` user and adding them to the `wheel` group.
+    ansible.builtin.user:
+      name: postgres
+      shell: /bin/bash
+      home: /home/postgres
+      uid: 1500
+      groups: 1500,wheel
+      append: true
+      password: {{ pass_encrypted }}
+  - name: Creating the .ssh folder for the `postgres` user.
+    file: 
+      path: /home/postgres/.ssh
+      state: directory 
+      owner: postgres
+      group: postgres
+      mode: 770
+  - name: Uploading the `temp` SSH key to the `postgres` user.
+    authorized_key:
+      user: postgres
+      key: "{{ lookup('file', '/root/.ssh/id_ed25519.pub') }}"

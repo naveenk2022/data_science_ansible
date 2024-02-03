@@ -1,0 +1,342 @@
+
+- name: Installing MySQL and its prerequisties on the RHEL 8 head node.
+  hosts: head_node
+  become: true
+  vars_files:
+    - /etc/inventory/users.yaml
+    - /etc/inventory/pass.yaml
+  tasks:
+  - name: Downloading the MySQL Repo to the RHEL8 head node
+    ansible.builtin.shell: wget https://dev.mysql.com/get/mysql80-community-release-el8-8.noarch.rpm
+    args:
+      chdir: /opt
+
+  - name: Installing the MySQL Repo on the RHEL8 head node
+    ansible.builtin.shell: yum localinstall /opt/mysql80-community-release-el8-8.noarch.rpm -y
+
+  - name: Disabling the mysql module to perform a local yum install
+    ansible.builtin.shell: yum -y module disable mysql
+
+  - name: Upgrading the MySQL Server
+    ansible.builtin.shell: yum -y install mysql-community-server
+
+  - name: Initializing MySQL
+    ansible.builtin.shell: service mysqld start
+
+  - name: Writing a script to secure the MySQL installation
+    copy:
+      dest: /opt/mysql_installation.sh
+      content: |
+        # Obtaining the  Temporary Password
+        root_temp_pass=$(grep 'A temporary password' /var/log/mysqld.log |tail -1 |awk '{split($0,a,": "); print a[2]}')
+        echo "root_temp_pass:"$root_temp_pass
+        # Creating a mysql_secure_installation.sql script to secure MySQL
+        cat > mysql_secure_installation.sql << EOF
+        # Ensuring that the server cannot be accessed without a password
+        # The password will be the cluster password
+        # Adding a user 'temp', a user 'hdfs', and a user 'hive'
+        ALTER USER 'root'@'localhost' IDENTIFIED BY '{{ password  }}';
+        CREATE USER 'temp'@'localhost' IDENTIFIED BY '{{ password  }}';
+        CREATE USER 'hive'@'localhost' IDENTIFIED BY '{{ password  }}';
+        CREATE USER 'hdfs'@'localhost' IDENTIFIED BY '{{ password  }}';
+        # Removing the anonymous users
+        DELETE FROM mysql.user WHERE User='';
+        # Disallowing remote login for root
+        DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
+        # Removing the demo database
+        DROP DATABASE IF EXISTS test;
+        DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+        # Make our changes take effect
+        FLUSH PRIVILEGES;
+        EOF
+
+        mysql -uroot -p"$root_temp_pass" --connect-expired-password <mysql_secure_installation.sql
+        # Creating another script to grant privileges to the hive, hdfs and temp users
+        cat > mysql_privilege_grant.sql << EOF
+        # Granting privileges to the users hive, hdfs and temp
+        CREATE DATABASE metastore;
+        use metastore;
+        grant all PRIVILEGES on *.* to "hive"@"localhost" with grant option;
+        grant all PRIVILEGES on *.* to "hdfs"@"localhost" with grant option;
+        grant all PRIVILEGES on *.* to "temp"@"localhost" with grant option;
+        FLUSH PRIVILEGES;
+        EOF
+
+        mysql -u root -p"{{ password  }}"  --connect-expired-password <mysql_privilege_grant.sql
+
+  - name: Running the script to secure MySQL, add the hive, hdfs and temp users, and create the metastore
+    ansible.builtin.shell: sh mysql_installation.sh
+    args:
+      chdir: /opt
+    ignore_errors: true
+- name: Installing Apache Hive and its prerequisties on the RHEL 8 head node.
+  hosts: head_node
+  become: true
+  become_method: sudo
+  tasks:
+  - name: Installing Maven on the RHEL 8 head node 
+    ansible.builtin.get_url: 
+      url: https://dlcdn.apache.org/maven/maven-3/3.9.4/binaries/apache-maven-3.9.4-bin.tar.gz
+      dest: /tmp/apache-maven-3.9.4-bin.tar.gz
+      checksum: "sha512:https://downloads.apache.org/maven/maven-3/3.9.4/binaries/apache-maven-3.9.4-bin.tar.gz.sha512"
+  
+  - name: Decompressing the Maven tarball on the Rhel 8 head node
+    ansible.builtin.unarchive: 
+      src: /tmp/apache-maven-3.9.4-bin.tar.gz
+      dest: /opt/
+      remote_src: yes
+
+  - name: Adding the Maven `bin` directory to the PATH
+    ansible.builtin.lineinfile:
+      path: /home/temp/.bashrc
+      insertafter: EOF
+      line: export PATH=$PATH:/opt/apache-maven-3.9.4/bin
+
+  - name: Downloading Apache Hive for the RHEL 8 head node 
+    ansible.builtin.get_url: 
+      url: https://dlcdn.apache.org/hive/hive-3.1.3/apache-hive-3.1.3-bin.tar.gz
+      dest: /tmp/apache-hive-3.1.3-bin.tar.gz
+      checksum: "sha256:https://dlcdn.apache.org/hive/hive-3.1.3/apache-hive-3.1.3-bin.tar.gz.sha256"
+      timeout: 1200
+
+  - name: Decompressing the Apache Hive tarball for the RHEL 8 head node 
+    ansible.builtin.unarchive:
+      src: /tmp/apache-hive-3.1.3-bin.tar.gz
+      dest: /opt/
+      remote_src: yes 
+
+  - name: Adding the installation directory to the PATH
+    ansible.builtin.lineinfile:
+      path: /home/temp/.bashrc
+      insertafter: EOF
+      line: export HIVE_HOME=/opt/apache-hive-3.1.3-bin
+
+  - name: Adding the installation directory to the PATH
+    ansible.builtin.lineinfile:
+      path: /home/temp/.bashrc
+      insertafter: EOF
+      line: export PATH=$PATH:$HIVE_HOME/bin
+
+  - name: Editing the log4j.properties file 
+    ansible.builtin.blockinfile:
+      path: /opt/hadoop-3.3.6/etc/hadoop/log4j.properties
+      insertafter: EOF
+      block: |
+        # Define an appender for the MRAppMaster logger
+        log4j.logger.org.apache.hadoop.mapreduce.v2.app.MRAppMaster=INFO, mrappmaster
+        # Appender for MRAppMaster logger
+        log4j.appender.mrappmaster=org.apache.log4j.ConsoleAppender
+        log4j.appender.mrappmaster.layout=org.apache.log4j.PatternLayout
+        log4j.appender.mrappmaster.layout.ConversionPattern=%d{yyyy-MM-dd HH:mm:ss} %-5p %c{1}:%L - %m%n
+
+- name: Configuring Apache Hive to work with MySQL on the RHEL 8 head node.
+  hosts: head_node
+  become: true
+  become_method: sudo
+  vars_files:
+    - /etc/inventory/users.yaml
+    - /etc/inventory/pass.yaml
+  tasks:
+
+  - name: Reloading the shell
+    ansible.builtin.shell: source ~/.bashrc
+
+  - name: Installing my-sqlconnector-java on the head node
+    ansible.builtin.yum: 
+      name: mysql-connector-java
+      state: present 
+
+  - name: Removing a duplicate library 
+    ansible.builtin.shell: rm /opt/apache-hive-3.1.3-bin/lib/log4j-slf4j-impl-2.17.1.jar 
+
+  - name: Loading the mysql-connector.jar to Hive
+    ansible.builtin.shell: cp /usr/share/java/mysql-connector-java.jar /opt/apache-hive-3.1.3-bin/lib
+
+  - name: Loading the mysql-connector.jar to Spark
+    ansible.builtin.shell: cp /usr/share/java/mysql-connector-java.jar /opt/spark-3.3.2-bin-hadoop3/jars
+
+  - name: Creating a spark-env.sh file
+    copy:
+      dest: /opt/spark-3.3.2-bin-hadoop3/conf/spark-env.sh
+      content: |
+        #!/usr/bin/env bash
+        export SPARK_CLASSPATH=/opt/apache-hive-3.1.3-bin/jars/mysql-connector-java.jar
+        export HADOOP_HOME=/opt/hadoop-3.3.6
+        export PATH=$PATH:$HADOOP_HOME/bin
+        export PATH=$PATH:$HADOOP_HOME/sbin
+        export HADOOP_MAPRED_HOME=${HADOOP_HOME}
+        export HADOOP_COMMON_HOME=${HADOOP_HOME}
+        export HADOOP_HDFS_HOME=${HADOOP_HOME}
+        export HADOOP_YARN_HOME=${HADOOP_HOME}
+        export JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk-1.8.0.402.b06-2.el8.x86_64
+        export LANG=en_US.UTF-8
+        export TZ=UTC
+        export CLASSPATH_PREPEND_DISTCACHE=
+        export SPARK_HOME=/opt/spark-3.3.2-bin-hadoop3
+        export PATH=$PATH:$SPARK_HOME/bin
+        export HADOOP_CONF_DIR=/opt/hadoop-3.3.6/etc/hadoop
+        export LD_LIBRARY_PATH=/opt/hadoop-3.3.6/lib/native:$LD_LIBRARY_PATH
+        export PYSPARK_DRIVER_PYTHON=jupyter
+        export PYSPARK_DRIVER_PYTHON_OPTS="notebook --NotebookApp.open_browser=False --NotebookApp.ip='{{ bush_domain }}' "
+        export PATH=$PATH:/usr/local/bin
+
+  - name: Creating a hive-site.xml file 
+    copy: 
+      dest: /opt/apache-hive-3.1.3-bin/conf/hive-site.xml
+      content: |
+        <configuration>
+          <property>
+            <name>javax.jdo.option.ConnectionURL</name> 
+            <value>jdbc:mysql://localhost/metastore?createDatabaseIfNotExist=true</value>
+            <description>metadata is stored in a MySQL server</description>
+          </property>
+          <property>
+            <name>javax.jdo.option.ConnectionDriverName</name>
+            <value>com.mysql.jdbc.Driver</value>
+            <description>MySQL JDBC driver class</description>
+          </property>
+          <property>
+            <name>javax.jdo.option.ConnectionUserName</name>
+            <value>hive</value>
+            <description>user name for connecting to mysql server</description>
+          </property>
+          <property>
+            <name>javax.jdo.option.ConnectionPassword</name>
+            <value>{{ password  }}</value>
+            <description>password for connecting to mysql server</description>
+          </property>
+          <property>
+            <name>datanucleus.autoCreateSchema</name>
+            <value>true</value>
+          </property>
+          <property>
+            <name>datanucleus.fixedDatastore</name>
+            <value>true</value>
+          </property>
+          <property>
+            <name>datanucleus.autoCreateTables</name>
+            <value>True</value>
+          </property>
+          <property>
+            <name>hive.server2.enable.doAs</name>
+            <value>false</value>
+          </property>
+          <property>
+            <name>hive.server2.thrift.min.worker.threads</name>
+            <value>5</value>
+          </property>
+          <property>
+            <name>hive.server2.thrift.max.worker.threads</name>
+            <value>500</value>
+          </property>
+          <property>
+            <name>hive.server2.thrift.port</name>
+            <value>10000</value>
+          </property>
+        </configuration>
+  
+  - name: Editing the spark-defaults.conf file 
+    ansible.builtin.lineinfile:
+      path: /opt/spark-3.3.2-bin-hadoop3/conf/spark-defaults.conf
+      regexp: '# spark.master                     spark://master:7077'
+      line: 'spark.master                     yarn'
+
+  - name: Configuring Spark to use the Hive Metastore
+    ansible.builtin.lineinfile:
+      path: /opt/spark-3.3.2-bin-hadoop3/conf/spark-defaults.conf
+      insertafter: EOF
+      line: spark.sql.warehouse.dir=hdfs://{{ bush_domain }}:9000/user/hive/warehouse
+
+  - name: Changing the timezone to UTC
+    ansible.builtin.shell: timedatectl set-timezone UTC
+
+  - name: Stopping MySQL
+    ansible.builtin.shell: service mysqld stop
+
+  - name: Starting MySQL 
+    ansible.builtin.shell: service mysqld start 
+
+  - name: Enabling ports 10000 and 10002 for the Hive Server
+    ansible.builtin.shell: iptables -I INPUT 1 -p tcp --dport 10000 -j ACCEPT
+
+  - name: Enabling ports 10000 and 10002 for the Hive Server
+    ansible.builtin.shell: iptables -I INPUT 1 -p tcp --dport 10002 -j ACCEPT
+
+
+- name: Initializing the metastore
+  hosts: head_node
+  become: true
+  become_user: temp
+  become_method: sudo
+  vars_files:
+    - /etc/inventory/users.yaml
+    - /etc/inventory/pass.yaml
+  tasks:
+
+  - name: Configuring the Hive Warehouse using hadoop
+    ansible.builtin.shell: |
+      source ~/.bashrc
+      export HADOOP_HOME=/opt/hadoop-3.3.6
+      export PATH=$PATH:$HADOOP_HOME/bin
+      export PATH=$PATH:$HADOOP_HOME/sbin
+      export HADOOP_MAPRED_HOME=${HADOOP_HOME}
+      export HADOOP_COMMON_HOME=${HADOOP_HOME}
+      export HADOOP_HDFS_HOME=${HADOOP_HOME}
+      export HADOOP_YARN_HOME=${HADOOP_HOME}
+      export HIVE_HOME=/opt/apache-hive-3.1.3-bin
+      export PATH=$PATH:$HIVE_HOME/bin
+      hdfs dfs -mkdir /tmp
+      hdfs dfs -mkdir /user
+      hdfs dfs -mkdir /user/hive
+      hdfs dfs -mkdir /user/hive/warehouse
+      hdfs dfs -chmod g+w /tmp
+      hdfs dfs -chmod g+w /user/hive/warehouse
+      schematool -dbType mysql -initSchema
+    args:
+      executable: /bin/bash
+
+  - name: Configuring Spark to use the Hive Metastore
+    ansible.builtin.lineinfile:
+      path: /opt/spark-3.3.2-bin-hadoop3/conf/spark-defaults.conf
+      insertafter: EOF
+      line: spark.sql.warehouse.dir=hdfs://{{ bush_domain }}:9000/user/hive/warehouse
+
+  - name: Starting the Hive Server 2 Service 
+    ansible.builtin.shell: |
+      source ~/.bashrc
+      nohup /opt/apache-hive-3.1.3-bin/bin/hiveserver2 &
+      
+- name: Rolling back Python to 3.9 on the Ubuntu cluster nodes.
+  hosts: cluster_nodes
+  become: true
+  tasks:
+    - name: Installing the deadsnakes PPA
+      ansible.builtin.shell: add-apt-repository ppa:deadsnakes/ppa -y
+
+    - name: Installing python3.9 on the Ubuntu cluster nodes.
+      ansible.builtin.apt:
+        name: python3.9
+        state: present
+        update_cache: yes
+      register: apt_action
+      retries: 100
+      until: apt_action is success or ('Failed to lock apt for exclusive operation' not in apt_action.msg and '/var/lib/dpkg/lock' not in apt_action.msg)
+
+    - name: Verify python3.9 installation path
+      ansible.builtin.shell: which python3.9
+      register: python_path
+
+    - name: Setting Python 3.9 as the default for python3
+      ansible.builtin.command: update-alternatives --install /usr/bin/python3 python3 {{ python_path.stdout }} 1
+
+    - name: Update alternatives to set Python 3.9 as default
+      ansible.builtin.command: update-alternatives --config python3
+      args:
+        creates: /usr/bin/python3.9
+
+    - name: Check the default Python version
+      ansible.builtin.shell: python3 --version
+      register: python_version
+
+    - debug:
+        var: python_version.stdout
